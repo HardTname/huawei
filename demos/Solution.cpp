@@ -69,6 +69,7 @@ struct Polygon {
 
     Polygon() = default;
     Polygon(std::initializer_list<Vector2D> vts) : vertices(vts) {}
+    // 这里有问题？
     Vector2D GetCenter() const
     {
         Vector2D center(0, 0);
@@ -114,6 +115,130 @@ struct Polygon {
         return isInside ? 1 : 0;
     }
 };
+// upd : 3.26
+// 传入多边形，得到关于原点对称的多边形
+Polygon GetNativePolygon(const Polygon& poly){
+    Polygon negPoly;
+    negPoly.vertices.reserve(poly.vertices.size());
+    for(const auto& v: poly.vertices){
+        //直接将 x 和 y 取反，得到关于原点对称的多边形
+        negPoly.vertices.emplace_back(-v.x,-v.y);
+    }
+    return negPoly;
+}
+
+// 检查点 p 是否在三角形 ABC 内部，不包含边界
+bool IsPointInTiangle(const Vector2D& p,const Vector2D& a,const Vector2D& b,const Vector2D& c){
+    double cp1=CrossProduct(a,b,p);
+    double cp2=CrossProduct(b,c,p);
+    double cp3=CrossProduct(c,a,p);
+    // 如果三个叉积的均大于 0 ，则点在三角形内部（题目保证逆时针输入）
+    return Sign(cp1)>0 && Sign(cp2)>0 && Sign(cp3)>0;
+}
+
+//将传入的简单多边形分解为多个三角形 （凸多边形）（O(n^3)、性能过差，需要优化）
+std::vector<Polygon>PartPolygonToTriangle(const Polygon& poly){
+    std::vector<Polygon> triangles;
+    std::vector<Vector2D> V = poly.vertices;
+
+    //如果已经是三角形，则直接返回
+    if(V.size()<=3){
+        triangles.emplace_back(poly);
+        return triangles;
+    }
+
+    // 不断切除，直至只剩三个顶点(耳切法）
+    while(V.size()>3){
+        int n = V.size();
+        bool earFound = false;
+
+        for(int i=0;i<n;i++){
+            int prev = (i-1+n)%n;
+            int next=(i+1)%n;
+
+            // 判断角 prev-i-next 是否为凸角（叉积prev_i x next_i > 0）
+            if(Sign(CrossProduct(V[prev],V[i],V[next]))>0){
+                bool isEar = true;
+                // 检查多边形内其他点是否在这个三角形内部（凹角对应的顶点可能会在里面）
+                for (int j = 0;j<n;j++){
+                    if(j==prev || j==i ||j==next){
+                        continue;
+                    }
+                    if(IsPointInTiangle(V[j],V[prev],V[i],V[next])){
+                        isEar=false;
+                        break;
+                    }
+                }
+                // 如果是耳朵，就切除掉
+                if(isEar){
+                    triangles.emplace_back(Polygon({V[prev],V[i],V[next]}));
+                    V.erase(V.begin()+i);
+                    earFound=true;
+                    break;
+                }
+            } 
+        }
+
+        if(!earFound)break;
+
+    }
+
+    if(V.size()==3){
+        triangles.emplace_back(Polygon({V[0],V[1],V[2]}));
+    }
+    return triangles;
+}
+
+// 重新排列顶点
+void Reorder(std::vector<Vector2D>& points){
+    int minidx=0;
+    int n=points.size();
+    for(int i = 1;i<n;i++){
+        if(points[i].y<points[minidx].y||(Sign(points[i].y-points[minidx].y)==0 && points[i].x<points[minidx].x)){
+            minidx=i;
+        }
+    }
+    std::rotate(points.begin(),points.begin()+minidx,points.end());
+}
+
+//计算凸多边形的闵可夫斯基和(有什么用?)
+Polygon MinkowskiSum(Polygon A,Polygon B){
+    Reorder(A.vertices);
+    Reorder(B.vertices);
+    
+    // 补齐末尾顶点
+    A.vertices.push_back(A.vertices[0]);
+    B.vertices.push_back(B.vertices[0]);
+
+    Polygon result;
+    int i=0,j=0;
+    int n = A.vertices.size()-1;
+    int m = B.vertices.size()-1;
+
+    while(i<n||j<m){
+        result.vertices.push_back(A.vertices[i]+B.vertices[i]);
+
+        double cross=0;
+        if(i<n&&j<m){
+            Vector2D edgeA = A.vertices[i+1]-A.vertices[i];
+            Vector2D edgeB = B.vertices[j+1]-B.vertices[j];
+            cross=edgeA.Cross(edgeB);
+        }
+        if(j==m||(i<n&&Sign(cross)>=0)){
+            ++i;
+        }
+        if(i==n||(j<m&&Sign(cross)<=0)){
+            ++j;
+        }
+    }
+
+    //移除多补的一个末尾顶点
+    A.vertices.pop_back();
+    B.vertices.pop_back();
+
+    return result;
+}
+
 
 int n1 = 0, n2 = 0, m = 0;
 Polygon polygon1;
@@ -140,50 +265,52 @@ Projection ProjectPolygon(const Polygon& poly, const Vector2D& axis)
     }
     return {minProj, maxProj};
 }
+// Vector2D GenSolution(const Vector2D& vec)
+// {
+//     Polygon polyB = polygon2;
+//     polyB.MoveByVec(vec);
 
-Vector2D GenSolution(const Vector2D& vec)
-{
-    Polygon polyB = polygon2;
-    polyB.MoveByVec(vec);
+//     double minOverlap = std::numeric_limits<double>::infinity();
+//     Vector2D smallestAxis;
 
-    double minOverlap = std::numeric_limits<double>::infinity();
-    Vector2D smallestAxis;
+//     const Polygon* polygons[2] = {&polygon1, &polyB};
 
-    const Polygon* polygons[2] = {&polygon1, &polyB};
+//     for (int i = 0; i < 2; ++i) {
+//         const Polygon& currentPoly = *polygons[i];
+//         for (size_t j = 0; j < currentPoly.vertices.size(); ++j) {
+//             Vector2D p1 = currentPoly.vertices[j];
+//             Vector2D p2 = currentPoly.vertices[(j + 1) % currentPoly.vertices.size()];
+//             Vector2D edge = p2 - p1;
 
-    for (int i = 0; i < 2; ++i) {
-        const Polygon& currentPoly = *polygons[i];
-        for (size_t j = 0; j < currentPoly.vertices.size(); ++j) {
-            Vector2D p1 = currentPoly.vertices[j];
-            Vector2D p2 = currentPoly.vertices[(j + 1) % currentPoly.vertices.size()];
-            Vector2D edge = p2 - p1;
+//             Vector2D axis = edge.Perp().Normalize();
 
-            Vector2D axis = edge.Perp().Normalize();
+//             Projection projA = ProjectPolygon(polygon1, axis);
+//             Projection projB = ProjectPolygon(polyB, axis);
 
-            Projection projA = ProjectPolygon(polygon1, axis);
-            Projection projB = ProjectPolygon(polyB, axis);
+//             if (projA.max <= projB.min || projB.max <= projA.min) {
+//                 return {0.0, 0.0};
+//             }
 
-            if (projA.max <= projB.min || projB.max <= projA.min) {
-                return {0.0, 0.0};
-            }
+//             double overlap = std::min(projA.max, projB.max) - std::max(projA.min, projB.min);
 
-            double overlap = std::min(projA.max, projB.max) - std::max(projA.min, projB.min);
+//             if (overlap < minOverlap) {
+//                 minOverlap = overlap;
+//                 smallestAxis = axis;
+//             }
+//         }
+//     }
+//     Vector2D centerA = polygon1.GetCenter();
+//     Vector2D centerB = polyB.GetCenter();
+//     Vector2D dir = centerB - centerA;
 
-            if (overlap < minOverlap) {
-                minOverlap = overlap;
-                smallestAxis = axis;
-            }
-        }
-    }
-    Vector2D centerA = polygon1.GetCenter();
-    Vector2D centerB = polyB.GetCenter();
-    Vector2D dir = centerB - centerA;
+//     if (smallestAxis.Dot(dir) < 0.0) {
+//         smallestAxis = smallestAxis * -1.0;
+//     }
 
-    if (smallestAxis.Dot(dir) < 0.0) {
-        smallestAxis = smallestAxis * -1.0;
-    }
+//     return {smallestAxis * minOverlap};
+// }
+Vector2D GenSolution(const Vector2D& vec){
 
-    return {smallestAxis * minOverlap};
 }
 
 // 选手在规定的时间内进行预处理，完成后返回OK
